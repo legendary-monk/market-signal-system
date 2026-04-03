@@ -299,33 +299,36 @@ def send_telegram_message(
 
 def send_signal(signal_result: Dict[str, Any]) -> bool:
     """
-    Main entry point: formats and sends the signal result to Telegram.
-    
-    Args:
-        signal_result: Full output from signal_engine.generate_signal()
-    
-    Returns:
-        bool: True if sent successfully.
+    Formats and sends the signal result to one or more Telegram IDs.
+    Supports comma-separated IDs in config.TELEGRAM_CHAT_ID.
     """
     try:
         message = _format_message(signal_result)
-        logger.debug("Formatted Telegram message (%d chars):\n%s",
-                     len(message), message)
-        return send_telegram_message(message)
+        
+        # Split the IDs by comma in case there are multiple
+        # .strip() removes any accidental spaces
+        chat_ids = [id.strip() for id in str(config.TELEGRAM_CHAT_ID).split(',')]
+        
+        success = True
+        for cid in chat_ids:
+            if not send_telegram_message(message, chat_id=cid):
+                logger.error(f"Failed to send to Chat ID: {cid}")
+                success = False
+        
+        return success
     
     except Exception as e:
         logger.error("Failed to format/send signal to Telegram: %s", e,
                      exc_info=True)
         return False
-
+        
 
 def send_error_alert(error_summary: str) -> bool:
     """
-    Sends a brief error notification when the pipeline fails critically.
+    Sends a brief error notification to all configured Telegram chat IDs.
     
-    WHY: If main.py crashes and you don't get a daily message, you won't know
-    if it's because the signal is NEUTRAL or because the system is broken.
-    This error message disambiguates.
+    WHY: If main.py crashes, all users need to know it was a system failure 
+    rather than just a neutral market day.
     """
     now_ist = datetime.now(timezone.utc) + IST_OFFSET
     time_str = now_ist.strftime('%d %b %Y, %I:%M %p IST')
@@ -336,14 +339,21 @@ def send_error_alert(error_summary: str) -> bool:
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🕐 {time_str}\n\n"
         "Market Signal System encountered an error:\n\n"
-        f"{error_summary[:500]}\n\n"  # Cap to avoid Telegram 4096-char limit
+        f"{error_summary[:500]}\n\n"
         "No signal generated today.\n"
         "Check market_signal.log for details.\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
     
-    return send_telegram_message(message)
-
+    # Logic to handle multiple IDs
+    # Converts "ID1,ID2" into ['ID1', 'ID2']
+    chat_ids = [id.strip() for id in str(config.TELEGRAM_CHAT_ID).split(',')]
+    
+    for cid in chat_ids:
+        send_telegram_message(message, chat_id=cid)
+    
+    return True
+    
 
 def test_connection() -> bool:
     """
