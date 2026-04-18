@@ -93,6 +93,17 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     positive_articles = signal_result.get('positive_articles', 0)
     negative_articles = signal_result.get('negative_articles', 0)
     reasons = signal_result.get('reasons', [])
+    posterior_p_up = signal_result.get('posterior_p_up', 0.5)
+    model_disagreement = signal_result.get('model_disagreement', 0.0)
+    epistemic_uncertainty = signal_result.get('epistemic_uncertainty', 1.0)
+    regime = signal_result.get('regime', 'UNKNOWN')
+    regime_diffusion_prob = signal_result.get('regime_diffusion_prob', 0.0)
+    regime_trend_prob = signal_result.get('regime_trend_prob', 0.0)
+    regime_shock_prob = signal_result.get('regime_shock_prob', 0.0)
+    market_energy = signal_result.get('market_energy', 0.0)
+    market_entropy = signal_result.get('market_entropy', 0.0)
+    recommended_weight = signal_result.get('recommended_weight', 0.0)
+    weight_reason = signal_result.get('weight_reason', '')
     has_market = signal_result.get('data_quality', {}).get('has_market', False)
     has_sentiment = signal_result.get('data_quality', {}).get('has_sentiment', False)
     
@@ -119,7 +130,21 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     # ─── Main Signal ───
     lines.append(f"{emoji}  Signal:  {signal}")
     lines.append(f"📶  Confidence: {confidence_pct:.1f}%")
+    lines.append(f"🎯  Posterior P(up): {posterior_p_up:.1%}")
     lines.append(f"     [{confidence_bar}]")
+    lines.append(f"⚖️  Recommended Weight: {recommended_weight:.2%}")
+    lines.append("")
+
+    # ─── Model Risk Diagnostics ───
+    lines.append("🧠 MODEL RISK")
+    lines.append(f"   Regime: {regime}")
+    lines.append(
+        f"   Regime Mix: D {regime_diffusion_prob:.1%} | "
+        f"T {regime_trend_prob:.1%} | S {regime_shock_prob:.1%}"
+    )
+    lines.append(f"   Disagreement: {model_disagreement:.3f}")
+    lines.append(f"   Uncertainty: {epistemic_uncertainty:.3f}")
+    lines.append(f"   Energy / Entropy: {market_energy:.2f} / {market_entropy:.2f}")
     lines.append("")
     
     # ─── Market Data ───
@@ -169,9 +194,20 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     # ─── Signal Reasoning ───
     if reasons:
         lines.append("🔍 KEY FACTORS")
-        for reason in reasons[:5]:  # Cap at 5 to keep message length reasonable
+        for reason in reasons[:3]:
             lines.append(f"   • {reason}")
+        if weight_reason:
+            lines.append(f"   • Position sizing: {weight_reason}")
         lines.append("")
+
+    # ─── Scenario Playbook ───
+    lines.append("🧭 SCENARIO PLAYBOOK")
+    lines.append("   • Base: keep suggested weight while shock/uncertainty stay contained.")
+    if regime_shock_prob >= 0.40 or market_energy >= 2.0:
+        lines.append("   • Defensive: shock/energy elevated — cut exposure and prefer neutral.")
+    else:
+        lines.append("   • Upside: trend persistence with low shock supports full risk budget.")
+    lines.append("")
     
     # ─── Data Quality Warning ───
     if not has_market or not has_sentiment:

@@ -43,10 +43,13 @@ def _validate_dataframe(df: pd.DataFrame, ticker: str) -> Tuple[bool, str]:
     
     # Check required columns
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-    missing = [c for c in required_cols if c in df.columns]
+    missing = [c for c in required_cols if c not in df.columns]
     # Note: yfinance sometimes returns lowercase column names
     # We'll handle both cases below
     
+    if missing:
+        return False, f"Missing required columns: {missing}"
+
     if len(df) < 5:
         return False, f"Insufficient data: only {len(df)} rows (need ≥5 for trend)"
     
@@ -136,6 +139,16 @@ def fetch_market_data(
             
             # Normalize column names for consistency
             df = _normalize_columns(df)
+
+            # Validate schema after normalization
+            missing_after_normalize = [c for c in ['Open', 'High', 'Low', 'Close', 'Volume']
+                                       if c not in df.columns]
+            if missing_after_normalize:
+                logger.error(
+                    "Normalized data is missing required columns for %s: %s",
+                    ticker, missing_after_normalize
+                )
+                return None
             
             # Drop timezone info from index for cleaner downstream handling
             # WHY: Mixed-timezone DataFrames cause subtle bugs in pandas operations

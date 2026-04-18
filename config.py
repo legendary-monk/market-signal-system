@@ -43,6 +43,7 @@ MAX_ARTICLES = 50
 # How old (in hours) an article can be and still count.
 # WHY 24: We're building a DAILY signal. Yesterday's news is noise today.
 MAX_ARTICLE_AGE_HOURS = 24
+ALLOW_UNDATED_ARTICLES = False
 
 # ─────────────────────────────────────────────
 # SIGNAL ENGINE PARAMETERS
@@ -110,6 +111,31 @@ REQUEST_RETRIES = 3
 RETRY_DELAY_BASE = 2   # Will be multiplied: 2s, 4s, 8s
 
 # ─────────────────────────────────────────────
+# ADVANCED MODEL / RISK SETTINGS
+# ─────────────────────────────────────────────
+# Bayesian fusion baseline weights (log-odds blend)
+FUSION_WEIGHT_PRICE = 0.45
+FUSION_WEIGHT_SENTIMENT = 0.30
+FUSION_WEIGHT_REGIME = 0.25
+
+# Exponential smoothing for online weight adaptation from observed outcomes
+FUSION_LEARNING_RATE = 0.05
+
+# Regime and physics thresholds
+SHOCK_REGIME_PROB_THRESHOLD = 0.55
+HIGH_ENERGY_THRESHOLD = 2.0
+HIGH_ENTROPY_THRESHOLD = 0.95
+
+# Risk sizing constraints
+PAYOFF_RATIO = 1.0              # Assumed symmetric payoff
+FRACTIONAL_KELLY = 0.20         # Conservative Kelly scaling
+MAX_RECOMMENDED_WEIGHT = 0.20   # 20% max allocation
+MIN_RECOMMENDED_WEIGHT = 0.0
+WEIGHT_UNCERTAINTY_PENALTY = 0.60
+DRAWDOWN_THROTTLE_FACTOR = 0.70
+MAX_CONSECUTIVE_LOSSES = 3
+
+# ─────────────────────────────────────────────
 # VALIDATION
 # ─────────────────────────────────────────────
 def validate_config():
@@ -132,6 +158,10 @@ def validate_config():
     total_weight = WEIGHT_SENTIMENT + WEIGHT_TREND + WEIGHT_VOLATILITY
     if abs(total_weight - 1.0) > 0.01:
         errors.append(f"Signal weights must sum to 1.0, currently sum to {total_weight:.2f}")
+
+    fusion_sum = FUSION_WEIGHT_PRICE + FUSION_WEIGHT_SENTIMENT + FUSION_WEIGHT_REGIME
+    if abs(fusion_sum - 1.0) > 0.01:
+        errors.append(f"Fusion weights must sum to 1.0, currently sum to {fusion_sum:.2f}")
     
     return errors
   

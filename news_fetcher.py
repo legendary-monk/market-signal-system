@@ -37,16 +37,18 @@ def _is_article_fresh(entry: feedparser.FeedParserDict) -> bool:
         bool: True if article is recent enough.
     """
     # feedparser normalizes dates into published_parsed (a time.struct_time)
-    if not hasattr(entry, 'published_parsed') or entry.published_parsed is None:
-        # WHY include undated articles: Some RSS feeds (especially Indian outlets)
-        # are inconsistent with date metadata. We don't want to silently drop them.
-        # Better to include with a warning.
-        logger.debug("Article has no date metadata — including anyway: %s",
-                     getattr(entry, 'title', 'Unknown'))
-        return True
+    date_field = None
+    if hasattr(entry, 'published_parsed') and entry.published_parsed is not None:
+        date_field = entry.published_parsed
+    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed is not None:
+        date_field = entry.updated_parsed
+
+    if date_field is None:
+        logger.debug("Article has no date metadata: %s", getattr(entry, 'title', 'Unknown'))
+        return bool(config.ALLOW_UNDATED_ARTICLES)
     
     # Convert to timezone-aware UTC datetime
-    pub_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+    pub_time = datetime(*date_field[:6], tzinfo=timezone.utc)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=config.MAX_ARTICLE_AGE_HOURS)
     
     return pub_time >= cutoff
@@ -147,8 +149,19 @@ def _fetch_single_feed(feed_url: str) -> List[Dict]:
             
             # Process each entry in this feed
             feed_article_count = 0
+            stale_filtered = 0
+            undated_filtered = 0
             for entry in feed.entries:
+                has_date = (
+                    (hasattr(entry, 'published_parsed') and entry.published_parsed is not None) or
+                    (hasattr(entry, 'updated_parsed') and entry.updated_parsed is not None)
+                )
+                if not has_date and not config.ALLOW_UNDATED_ARTICLES:
+                    undated_filtered += 1
+                    continue
+
                 if not _is_article_fresh(entry):
+                    stale_filtered += 1
                     continue
                 
                 parsed = _parse_entry(entry, feed_url)
@@ -156,8 +169,10 @@ def _fetch_single_feed(feed_url: str) -> List[Dict]:
                     articles.append(parsed)
                     feed_article_count += 1
             
-            logger.info("Fetched %d fresh articles from %s",
-                        feed_article_count, feed_url)
+            logger.info(
+                "Fetched %d fresh articles from %s (total=%d stale_filtered=%d undated_filtered=%d)",
+                feed_article_count, feed_url, len(feed.entries), stale_filtered, undated_filtered
+            )
             break  # Success — don't retry
             
         except requests.exceptions.Timeout:
