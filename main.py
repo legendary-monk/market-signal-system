@@ -30,23 +30,17 @@ import traceback
 from datetime import datetime, timezone, timedelta
 
 # ── Import all modules ──
-# If any import fails here, the system has a setup problem.
-# We let it fail with a clear error rather than catching silently.
-try:
-    import config
-    from logger import get_logger
-    from news_fetcher import fetch_news
-    from sentiment import analyze_sentiment, get_sentiment_summary
-    from market_data import fetch_market_data, get_latest_price
-    from features import compute_features
-    from signal_engine import generate_signal
-    from telegram_bot import send_signal, send_error_alert, test_connection
-    from validator import save_prediction, update_pending_outcomes, compute_performance_metrics
-except ImportError as e:
-    print(f"\n[FATAL] Import failed: {e}")
-    print("Make sure all required libraries are installed.")
-    print("Run: pip install feedparser yfinance requests textblob pandas numpy")
-    sys.exit(1)
+# Import errors should fail fast with Python's native traceback
+# so setup issues are explicit during startup.
+import config
+from logger import get_logger
+from news_fetcher import fetch_news
+from sentiment import analyze_sentiment, get_sentiment_summary
+from market_data import fetch_market_data, get_latest_price
+from features import compute_features
+from signal_engine import generate_signal
+from telegram_bot import send_signal, send_error_alert, test_connection
+from validator import save_prediction, update_pending_outcomes, compute_performance_metrics
 
 logger = get_logger(__name__)
 
