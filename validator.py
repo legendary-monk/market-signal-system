@@ -33,6 +33,7 @@ import json
 
 import config
 from logger import get_logger
+from market_data import fetch_market_data
 
 logger = get_logger(__name__)
 
@@ -55,6 +56,16 @@ CSV_COLUMNS = [
     'actual_change_pct', # (next_close - nifty_close) / nifty_close * 100
     'outcome',           # CORRECT / INCORRECT / NEUTRAL_HIT / PENDING
     'article_count',     # Number of articles analyzed
+    'posterior_p_up',
+    'model_disagreement',
+    'epistemic_uncertainty',
+    'regime',
+    'regime_diffusion_prob',
+    'regime_trend_prob',
+    'regime_shock_prob',
+    'market_energy',
+    'market_entropy',
+    'recommended_weight',
 ]
 
 # Threshold for calling NEUTRAL prediction correct (±0.5% price change)
@@ -126,6 +137,16 @@ def save_prediction(signal_result: Dict[str, Any]) -> bool:
         'actual_change_pct': '', # Filled in next day
         'outcome': 'PENDING',    # Will be updated next run
         'article_count': signal_result.get('article_count', 0),
+        'posterior_p_up': round(signal_result.get('posterior_p_up', 0.5), 4),
+        'model_disagreement': round(signal_result.get('model_disagreement', 0.0) or 0.0, 4),
+        'epistemic_uncertainty': round(signal_result.get('epistemic_uncertainty', 0.0) or 0.0, 4),
+        'regime': signal_result.get('regime', ''),
+        'regime_diffusion_prob': round(signal_result.get('regime_diffusion_prob', 0.0) or 0.0, 4),
+        'regime_trend_prob': round(signal_result.get('regime_trend_prob', 0.0) or 0.0, 4),
+        'regime_shock_prob': round(signal_result.get('regime_shock_prob', 0.0) or 0.0, 4),
+        'market_energy': round(signal_result.get('market_energy', 0.0) or 0.0, 4),
+        'market_entropy': round(signal_result.get('market_entropy', 0.0) or 0.0, 4),
+        'recommended_weight': round(signal_result.get('recommended_weight', 0.0) or 0.0, 4),
     }
     
     try:
@@ -158,13 +179,22 @@ def update_pending_outcomes(current_close: Optional[float]) -> int:
     WHY this design: We can't know yesterday's outcome until today's market closes.
     The PENDING system elegantly handles this temporal dependency.
     """
-    if current_close is None:
-        logger.warning("Cannot update outcomes: no current close price available")
-        return 0
-    
     predictions = _read_all_predictions()
     if not predictions:
         return 0
+
+    market_df = fetch_market_data(lookback_days=120)
+    if market_df is None or market_df.empty:
+        if current_close is None:
+            logger.warning("Cannot update outcomes: no market data available")
+            return 0
+        logger.warning("Using fallback single current close for pending outcomes due missing market history")
+        close_by_date = {}
+    else:
+        close_by_date = {
+            d.date().isoformat(): float(c)
+            for d, c in zip(market_df.index, market_df['Close'])
+        }
     
     updated_count = 0
     updated_predictions = []
@@ -189,9 +219,24 @@ def update_pending_outcomes(current_close: Optional[float]) -> int:
             updated_predictions.append(pred)
             continue
         
+        pred_date = pred.get('date')
+        next_close = None
+        next_date = None
+        if close_by_date and pred_date:
+            future_days = sorted([d for d in close_by_date.keys() if d > pred_date])
+            if future_days:
+                next_date = future_days[0]
+                next_close = close_by_date[next_date]
+
+        if next_close is None:
+            if current_close is None:
+                updated_predictions.append(pred)
+                continue
+            next_close = current_close
+
         # Compute actual change
-        actual_change_pct = ((current_close - prev_close) / prev_close) * 100
-        pred['next_close'] = round(current_close, 2)
+        actual_change_pct = ((next_close - prev_close) / prev_close) * 100
+        pred['next_close'] = round(next_close, 2)
         pred['actual_change_pct'] = round(actual_change_pct, 4)
         
         # Determine if our prediction was correct
@@ -200,8 +245,8 @@ def update_pending_outcomes(current_close: Optional[float]) -> int:
         
         updated_count += 1
         logger.info(
-            "Outcome resolved for %s: signal=%s actual_change=%.2f%% → %s",
-            pred.get('date'), signal, actual_change_pct, pred['outcome']
+            "Outcome resolved for %s using next_date=%s: signal=%s actual_change=%.2f%% → %s",
+            pred.get('date'), next_date or "fallback_current", signal, actual_change_pct, pred['outcome']
         )
         
         updated_predictions.append(pred)
