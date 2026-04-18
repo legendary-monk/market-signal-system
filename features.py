@@ -347,6 +347,9 @@ def compute_features(df: pd.DataFrame) -> FeatureDict:
         'price_change_1d': price_change_1d,   # Percentage
         'price_change_5d': price_change_5d,   # Percentage
         'data_rows': len(df),
+        'market_df': df,
+        'last_return': float(df['Returns'].iloc[-1]) if 'Returns' in df.columns and len(df) > 0 else 0.0,
+        'consecutive_losses': 0,              # placeholder; can be populated from validator metrics
     }
     
     logger.info(

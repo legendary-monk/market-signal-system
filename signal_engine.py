@@ -39,6 +39,11 @@ import math
 
 import config
 from logger import get_logger
+from models.state_space import estimate_state
+from models.regime_hmm import infer_regime_probabilities
+from models.market_physics import compute_physics_metrics
+from models.fusion import fuse_probabilities
+from risk.sizing import recommend_weight
 
 logger = get_logger(__name__)
 
@@ -280,12 +285,51 @@ def generate_signal(
         # Normalize from [-1, +1] to [0, 1] for confidence readability
         normalized_score = (raw_score + 1) / 2
         
-        # Classify
-        signal = _classify_signal(normalized_score)
+        # Advanced model components
+        market_df = features.get('market_df')
+        state_est = estimate_state(market_df) if has_market else {
+            'latent_drift': 0.0,
+            'latent_acceleration': 0.0,
+            'vol_state': 0.01,
+            'state_uncertainty': 1.0,
+            'p_up_1d': 0.5,
+        }
+        regime = infer_regime_probabilities(market_df) if has_market else {
+            'p_diffusion': 0.34,
+            'p_trend': 0.33,
+            'p_shock': 0.33,
+            'entropy': 1.0986,
+            'regime': 'UNKNOWN',
+        }
+
+        # Convert sentiment score [-1,+1] into probability
+        p_sentiment = max(0.01, min(0.99, (sentiment_score + 1.0) / 2.0))
+        p_price = state_est.get('p_up_1d', 0.5)
+        # Trend regime maps bullishness higher, shock lower
+        p_regime = max(0.01, min(0.99, 0.50 + 0.35 * regime.get('p_trend', 0.0) - 0.35 * regime.get('p_shock', 0.0)))
+
+        fusion = fuse_probabilities(p_price, p_sentiment, p_regime)
+        posterior_p_up = fusion['posterior_p_up']
+
+        # Classify from posterior probability
+        signal = _classify_signal(posterior_p_up)
         
         # Compute confidence
-        confidence = _compute_confidence(raw_score, normalized_score,
+        confidence = posterior_p_up if signal == "BULLISH" else (1 - posterior_p_up if signal == "BEARISH" else 1 - abs(posterior_p_up - 0.5) * 2)
+        confidence = _compute_confidence(raw_score, confidence,
                                          has_sentiment, has_market)
+
+        last_return = features.get('last_return', 0.0) or 0.0
+        physics = compute_physics_metrics(
+            last_return=last_return,
+            vol_estimate=state_est.get('vol_state', 0.01),
+            regime_probs=regime
+        )
+
+        if physics['energy'] >= config.HIGH_ENERGY_THRESHOLD and regime.get('p_shock', 0) >= config.SHOCK_REGIME_PROB_THRESHOLD:
+            confidence = round(max(0.05, confidence * 0.7), 4)
+        if physics['entropy'] >= config.HIGH_ENTROPY_THRESHOLD:
+            confidence = round(max(0.05, confidence * 0.8), 4)
         
         # Generate human-readable reasoning
         reasons = _generate_reasoning(signal, sentiment_score, features, normalized_score)
@@ -301,6 +345,13 @@ def generate_signal(
             "raw_score=%.4f | normalized=%.4f",
             signal, confidence, raw_score, normalized_score
         )
+
+        sizing = recommend_weight(
+            p_up=posterior_p_up,
+            uncertainty=fusion.get('epistemic_uncertainty', 0.5),
+            shock_prob=regime.get('p_shock', 0.33),
+            consecutive_losses=features.get('consecutive_losses', 0),
+        )
         
         return {
             # Core signal
@@ -311,6 +362,9 @@ def generate_signal(
             # Scores (for debugging and validator)
             'raw_score': round(raw_score, 4),
             'normalized_score': round(normalized_score, 4),
+            'posterior_p_up': posterior_p_up,
+            'model_disagreement': fusion.get('model_disagreement'),
+            'epistemic_uncertainty': fusion.get('epistemic_uncertainty'),
             
             # Inputs (for Telegram context)
             'sentiment_score': round(sentiment_score, 4),
@@ -318,6 +372,15 @@ def generate_signal(
             'vol_regime': features.get('vol_regime'),
             'rsi': features.get('rsi'),
             'momentum': features.get('momentum'),
+            'latent_drift': state_est.get('latent_drift'),
+            'latent_acceleration': state_est.get('latent_acceleration'),
+            'state_uncertainty': state_est.get('state_uncertainty'),
+            'regime': regime.get('regime'),
+            'regime_diffusion_prob': regime.get('p_diffusion'),
+            'regime_trend_prob': regime.get('p_trend'),
+            'regime_shock_prob': regime.get('p_shock'),
+            'market_energy': physics.get('energy'),
+            'market_entropy': physics.get('entropy'),
             
             # Price context
             'latest_close': features.get('latest_close'),
@@ -331,6 +394,8 @@ def generate_signal(
             
             # Reasoning
             'reasons': reasons,
+            'recommended_weight': sizing.get('recommended_weight'),
+            'weight_reason': sizing.get('weight_reason'),
             
             # Metadata
             'timestamp': timestamp,
@@ -350,17 +415,31 @@ def generate_signal(
             'confidence_pct': 5.0,
             'raw_score': 0.0,
             'normalized_score': 0.5,
+            'posterior_p_up': 0.5,
+            'model_disagreement': 0.0,
+            'epistemic_uncertainty': 1.0,
             'sentiment_score': sentiment_score,
             'trend_score': None,
             'vol_regime': None,
             'rsi': None,
             'momentum': None,
+            'latent_drift': 0.0,
+            'latent_acceleration': 0.0,
+            'state_uncertainty': 1.0,
+            'regime': 'UNKNOWN',
+            'regime_diffusion_prob': 0.34,
+            'regime_trend_prob': 0.33,
+            'regime_shock_prob': 0.33,
+            'market_energy': 0.0,
+            'market_entropy': 1.0986,
             'latest_close': None,
             'price_change_1d': None,
             'price_change_5d': None,
             'article_count': 0,
             'positive_articles': 0,
             'negative_articles': 0,
+            'recommended_weight': 0.0,
+            'weight_reason': 'fallback',
             'reasons': [f"Signal engine error: {str(e)[:100]}"],
             'timestamp': timestamp,
             'data_quality': {'has_sentiment': False, 'has_market': False},

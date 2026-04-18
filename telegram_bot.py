@@ -93,6 +93,9 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     positive_articles = signal_result.get('positive_articles', 0)
     negative_articles = signal_result.get('negative_articles', 0)
     reasons = signal_result.get('reasons', [])
+    posterior_p_up = signal_result.get('posterior_p_up', 0.5)
+    recommended_weight = signal_result.get('recommended_weight', 0.0)
+    weight_reason = signal_result.get('weight_reason', '')
     has_market = signal_result.get('data_quality', {}).get('has_market', False)
     has_sentiment = signal_result.get('data_quality', {}).get('has_sentiment', False)
     
@@ -119,7 +122,9 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     # ─── Main Signal ───
     lines.append(f"{emoji}  Signal:  {signal}")
     lines.append(f"📶  Confidence: {confidence_pct:.1f}%")
+    lines.append(f"🎯  Posterior P(up): {posterior_p_up:.1%}")
     lines.append(f"     [{confidence_bar}]")
+    lines.append(f"⚖️  Recommended Weight: {recommended_weight:.2%}")
     lines.append("")
     
     # ─── Market Data ───
@@ -171,6 +176,8 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
         lines.append("🔍 KEY FACTORS")
         for reason in reasons[:5]:  # Cap at 5 to keep message length reasonable
             lines.append(f"   • {reason}")
+        if weight_reason:
+            lines.append(f"   • Position sizing: {weight_reason}")
         lines.append("")
     
     # ─── Data Quality Warning ───
