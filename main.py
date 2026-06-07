@@ -2,18 +2,19 @@
 main.py — Pipeline Orchestrator
 =================================
 This is the entry point for the entire Market Signal System.
-Run this file every morning to generate and receive your daily signal.
+Run this file weekly to generate and receive your weekly market report.
 
 Pipeline flow:
     1. Validate configuration
-    2. Update yesterday's pending outcome (if market data available)
-    3. Fetch financial news
-    4. Analyze news sentiment
+    2. Update pending outcomes (if market data available)
+    3. Fetch weekly financial news
+    4. Analyze weekly news sentiment
     5. Fetch market data (Nifty 50)
     6. Compute market features
-    7. Generate signal
-    8. Send to Telegram
+    7. Generate weekly signal
+    8. Attach the news associated with the biggest weekly moves
     9. Save prediction to CSV
+    10. Send to Telegram
 
 Design Principles:
     - Each step is wrapped in try/except so one failure doesn't kill others
@@ -39,8 +40,9 @@ from sentiment import analyze_sentiment, get_sentiment_summary
 from market_data import fetch_market_data, get_latest_price
 from features import compute_features
 from signal_engine import generate_signal
-from telegram_bot import send_signal, send_error_alert, test_connection
+from telegram_bot import send_weekly_report, send_error_alert, test_connection
 from validator import save_prediction, update_pending_outcomes, compute_performance_metrics
+from weekly_report import build_weekly_movement_news
 
 logger = get_logger(__name__)
 
@@ -59,7 +61,7 @@ def run_pipeline() -> bool:
     now_ist = start_time + IST_OFFSET
     
     logger.info("="*60)
-    logger.info("MARKET SIGNAL SYSTEM — Run started at %s IST",
+    logger.info("MARKET SIGNAL SYSTEM — Weekly run started at %s IST",
                 now_ist.strftime('%Y-%m-%d %H:%M:%S'))
     logger.info("="*60)
     
@@ -86,8 +88,8 @@ def run_pipeline() -> bool:
     
     # ─────────────────────────────────────────────────────────
     # STEP 1: Fetch Market Data
-    # WHY early: We need current close price to update yesterday's
-    # PENDING outcome in the validator. Also if this fails, we know
+    # WHY early: We need the latest close price to update prior
+    # PENDING outcomes in the validator. Also if this fails, we know
     # before spending time on news analysis.
     # ─────────────────────────────────────────────────────────
     logger.info("[Step 1] Fetching market data...")
@@ -106,9 +108,9 @@ def run_pipeline() -> bool:
         logger.error("[Step 1] Market data fetch crashed: %s", e, exc_info=True)
     
     # ─────────────────────────────────────────────────────────
-    # STEP 2: Update Yesterday's Pending Outcome
-    # WHY now: We have today's price. Update yesterday's PENDING
-    # before saving today's new prediction.
+    # STEP 2: Update Pending Outcomes
+    # WHY now: Weekly runs still need to resolve any older PENDING
+    # prediction rows before saving the latest weekly signal.
     # ─────────────────────────────────────────────────────────
     logger.info("[Step 2] Updating pending prediction outcomes...")
     
@@ -150,7 +152,7 @@ def run_pipeline() -> bool:
     # ─────────────────────────────────────────────────────────
     # STEP 4: Fetch News
     # ─────────────────────────────────────────────────────────
-    logger.info("[Step 4] Fetching financial news...")
+    logger.info("[Step 4] Fetching weekly financial news...")
     articles = []
     
     try:
@@ -158,7 +160,7 @@ def run_pipeline() -> bool:
         logger.info("[Step 4] Fetched %d articles", len(articles))
         
         if not articles:
-            logger.warning("[Step 4] No articles fetched — news sentiment will be neutral")
+            logger.warning("[Step 4] No weekly articles fetched — news sentiment will be neutral")
     
     except Exception as e:
         logger.error("[Step 4] News fetch crashed: %s", e, exc_info=True)
@@ -166,7 +168,7 @@ def run_pipeline() -> bool:
     # ─────────────────────────────────────────────────────────
     # STEP 5: Analyze Sentiment
     # ─────────────────────────────────────────────────────────
-    logger.info("[Step 5] Analyzing news sentiment...")
+    logger.info("[Step 5] Analyzing weekly news sentiment...")
     sentiment_score = 0.0
     analyzed_articles = []
     
@@ -176,7 +178,7 @@ def run_pipeline() -> bool:
             logger.info("[Step 5] Sentiment: %.4f across %d articles",
                         sentiment_score, len(analyzed_articles))
         else:
-            logger.warning("[Step 5] No articles to analyze — using neutral sentiment")
+            logger.warning("[Step 5] No weekly articles to analyze — using neutral sentiment")
     
     except Exception as e:
         logger.error("[Step 5] Sentiment analysis crashed: %s", e, exc_info=True)
@@ -186,7 +188,7 @@ def run_pipeline() -> bool:
     # WHY in its own try block: Signal engine has emergency fallback
     # to NEUTRAL, but we still want to catch unexpected failures.
     # ─────────────────────────────────────────────────────────
-    logger.info("[Step 6] Generating signal...")
+    logger.info("[Step 6] Generating weekly signal...")
     signal_result = None
     
     try:
@@ -217,6 +219,7 @@ def run_pipeline() -> bool:
             'latest_close': get_latest_price(market_df),
             'price_change_1d': None,
             'price_change_5d': None,
+            'movement_news': [],
             'article_count': len(analyzed_articles),
             'positive_articles': 0,
             'negative_articles': 0,
@@ -226,37 +229,51 @@ def run_pipeline() -> bool:
         }
     
     # ─────────────────────────────────────────────────────────
-    # STEP 7: Save Prediction to CSV
+    # STEP 7: Attach Weekly Movement-News Context
+    # WHY here: It needs both market movement data and analyzed article
+    # sentiment so the report can show the largest moves and associated news.
+    # ─────────────────────────────────────────────────────────
+    logger.info("[Step 7] Building weekly movement-news context...")
+
+    try:
+        signal_result['movement_news'] = build_weekly_movement_news(market_df, analyzed_articles)
+        logger.info("[Step 7] Movement-news entries: %d", len(signal_result['movement_news']))
+    except Exception as e:
+        logger.error("[Step 7] Movement-news context failed: %s", e, exc_info=True)
+        signal_result['movement_news'] = []
+
+    # ─────────────────────────────────────────────────────────
+    # STEP 8: Save Prediction to CSV
     # WHY before Telegram: If Telegram fails, we still have a record.
     # ─────────────────────────────────────────────────────────
-    logger.info("[Step 7] Saving prediction...")
+    logger.info("[Step 8] Saving prediction...")
     
     try:
         saved = save_prediction(signal_result)
         if saved:
-            logger.info("[Step 7] Prediction saved to %s", config.PREDICTIONS_FILE)
+            logger.info("[Step 8] Prediction saved to %s", config.PREDICTIONS_FILE)
         else:
-            logger.warning("[Step 7] Failed to save prediction")
+            logger.warning("[Step 8] Failed to save prediction")
     
     except Exception as e:
-        logger.error("[Step 7] Save prediction crashed: %s", e, exc_info=True)
+        logger.error("[Step 8] Save prediction crashed: %s", e, exc_info=True)
     
     # ─────────────────────────────────────────────────────────
-    # STEP 8: Send Telegram Message
+    # STEP 9: Send Telegram Message
     # ─────────────────────────────────────────────────────────
-    logger.info("[Step 8] Sending Telegram signal...")
+    logger.info("[Step 9] Sending weekly Telegram report...")
     telegram_success = False
     
     try:
-        telegram_success = send_signal(signal_result)
+        telegram_success = send_weekly_report(signal_result)
         
         if telegram_success:
-            logger.info("[Step 8] Telegram message sent successfully")
+            logger.info("[Step 9] Telegram weekly report sent successfully")
         else:
-            logger.error("[Step 8] Telegram message delivery failed")
+            logger.error("[Step 9] Telegram weekly report delivery failed")
     
     except Exception as e:
-        logger.error("[Step 8] Telegram send crashed: %s", e, exc_info=True)
+        logger.error("[Step 9] Telegram send crashed: %s", e, exc_info=True)
     
     # ─────────────────────────────────────────────────────────
     # PIPELINE COMPLETE
@@ -299,7 +316,7 @@ def run_test_mode():
     
     if success:
         print("\n✅ SUCCESS! Check your Telegram for the test message.")
-        print("You can now run the full pipeline: python main.py")
+        print("You can now run the weekly pipeline: python main.py")
     else:
         print("\n❌ FAILED! Check config.py and market_signal.log for details.")
     
@@ -354,7 +371,7 @@ if __name__ == "__main__":
     else:
         print(f"Unknown mode: '{mode}'")
         print("Usage: python main.py [run|test|performance]")
-        print("  run         — Generate and send today's signal (default)")
+        print("  run         — Generate and send this week's report (default)")
         print("  test        — Send a test message to verify Telegram setup")
         print("  performance — Show signal accuracy report")
         sys.exit(1)

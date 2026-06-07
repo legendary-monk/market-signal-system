@@ -27,8 +27,8 @@ def _is_article_fresh(entry: feedparser.FeedParserDict) -> bool:
     """
     Checks if an article was published within MAX_ARTICLE_AGE_HOURS.
     
-    WHY filter by age: Sentiment from 3-day-old news is stale.
-    A BEARISH article from Monday shouldn't affect Wednesday's signal.
+    WHY filter by age: Weekly reports need recent headlines from the full report window.
+    Older headlines should not affect the current weekly signal.
     
     Args:
         entry: A feedparser entry object.
@@ -89,9 +89,15 @@ def _parse_entry(entry: feedparser.FeedParserDict, source: str) -> Optional[Dict
     
     # Get published date as ISO string (human-readable for logging/storage)
     published = None
+    date_field = None
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
+        date_field = entry.published_parsed
+    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+        date_field = entry.updated_parsed
+
+    if date_field:
         try:
-            published = datetime(*entry.published_parsed[:6]).isoformat()
+            published = datetime(*date_field[:6]).isoformat()
         except (TypeError, ValueError):
             published = None
     

@@ -9,7 +9,7 @@ WHY Yahoo Finance (yfinance):
 - Returns OHLCV data in standard format
 - Well-maintained Python library
 - Limitation: Rate limits exist. If run too frequently, Yahoo
-  may temporarily block. We run once daily — well within limits.
+  may temporarily block. We run once weekly — well within limits.
 
 WHY pandas DataFrame as output:
 - All downstream computations (features.py) use vectorized pandas operations

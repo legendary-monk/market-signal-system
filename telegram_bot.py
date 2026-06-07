@@ -7,7 +7,7 @@ and deliver it via Telegram Bot API.
 WHY Telegram Bot API (not email, not WhatsApp):
 - Free, no third-party library needed (raw HTTPS requests)
 - Instant delivery, no spam filters
-- No rate limits for reasonable usage (one message/day is well within limits)
+- No rate limits for reasonable usage (one message/week is well within limits)
 - Easy to set up on any device in under 5 minutes
 - The Bot API is stable and has no authentication complexity
 
@@ -106,6 +106,7 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     weight_reason = signal_result.get('weight_reason', '')
     has_market = signal_result.get('data_quality', {}).get('has_market', False)
     has_sentiment = signal_result.get('data_quality', {}).get('has_sentiment', False)
+    movement_news = signal_result.get('movement_news', [])
     
     # Current time in IST
     now_utc = datetime.now(timezone.utc)
@@ -122,7 +123,7 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
     
     # ─── Header ───
     lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("📊 MARKET SIGNAL REPORT")
+    lines.append("📊 WEEKLY MARKET SIGNAL REPORT")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"🕐 {time_str}")
     lines.append("")
@@ -154,11 +155,11 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
         
         if price_change_1d is not None:
             sign = '+' if price_change_1d >= 0 else ''
-            lines.append(f"   1-Day: {sign}{price_change_1d:.2f}%  {_get_trend_arrow(price_change_1d)}")
+            lines.append(f"   Latest Day: {sign}{price_change_1d:.2f}%  {_get_trend_arrow(price_change_1d)}")
         
         if price_change_5d is not None:
             sign = '+' if price_change_5d >= 0 else ''
-            lines.append(f"   5-Day: {sign}{price_change_5d:.2f}%  {trend_arrow}")
+            lines.append(f"   Week: {sign}{price_change_5d:.2f}%  {trend_arrow}")
         
         if vol_regime:
             vol_map = {'HIGH': '⚡ High', 'NORMAL': '〜 Normal', 'LOW': '🧘 Low'}
@@ -174,7 +175,7 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
         
         lines.append("")
     else:
-        lines.append("📈 Market data unavailable today")
+        lines.append("📈 Market data unavailable for this week")
         lines.append("")
     
     # ─── News Sentiment ───
@@ -188,9 +189,33 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
         lines.append(f"   Positive: {positive_articles} | Negative: {negative_articles}")
         lines.append("")
     else:
-        lines.append("📰 News data unavailable today")
+        lines.append("📰 Weekly news data unavailable")
         lines.append("")
-    
+
+    # ─── Biggest Weekly Moves + Associated News ───
+    if movement_news:
+        lines.append("🗞️ BIGGEST WEEKLY MOVES + LIKELY NEWS DRIVERS")
+        for item in movement_news:
+            move_pct = item.get('move_pct', 0.0)
+            sign = '+' if move_pct >= 0 else ''
+            direction = 'up' if move_pct >= 0 else 'down'
+            close = item.get('close')
+            close_text = f" | Close {close:,.2f}" if close else ""
+            lines.append(f"   • {item.get('date')}: {sign}{move_pct:.2f}% {direction}{close_text}")
+            articles = item.get('articles', [])
+            if articles:
+                for article in articles[:2]:
+                    score = article.get('sentiment_score', 0.0) or 0.0
+                    lines.append(
+                        f"     - {article.get('title', 'Untitled')} "
+                        f"({article.get('sentiment_label', 'NEUTRAL')} {score:+.2f}, "
+                        f"{article.get('source', 'unknown source')})"
+                    )
+            else:
+                lines.append("     - No same-day RSS headline was available; avoid assuming causality.")
+        lines.append("   Note: items are associated by date/sentiment and are not proof of causality.")
+        lines.append("")
+
     # ─── Signal Reasoning ───
     if reasons:
         lines.append("🔍 KEY FACTORS")
@@ -218,7 +243,7 @@ def _format_message(signal_result: Dict[str, Any]) -> str:
         if not has_sentiment:
             missing.append("news sentiment")
         lines.append(f"   Missing: {', '.join(missing)}")
-        lines.append("   Signal reliability is REDUCED today.")
+        lines.append("   Signal reliability is REDUCED this week.")
         lines.append("")
     
     # ─── Disclaimer ───
@@ -333,9 +358,9 @@ def send_telegram_message(
     return False
 
 
-def send_signal(signal_result: Dict[str, Any]) -> bool:
+def send_weekly_report(signal_result: Dict[str, Any]) -> bool:
     """
-    Formats and sends the signal result to one or more Telegram IDs.
+    Formats and sends the weekly signal report to one or more Telegram IDs.
     Supports comma-separated IDs in config.TELEGRAM_CHAT_ID.
     """
     try:
@@ -376,7 +401,7 @@ def send_error_alert(error_summary: str) -> bool:
         f"🕐 {time_str}\n\n"
         "Market Signal System encountered an error:\n\n"
         f"{error_summary[:500]}\n\n"
-        "No signal generated today.\n"
+        "No weekly report generated.\n"
         "Check market_signal.log for details.\n"
         "━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -401,7 +426,7 @@ def test_connection() -> bool:
         "✅ Market Signal System — Connection Test\n"
         f"Time: {now_ist.strftime('%d %b %Y, %I:%M %p IST')}\n\n"
         "Bot is configured correctly!\n"
-        "You will receive your daily market signal here."
+        "You will receive your weekly market signal report here."
     )
     
     success = send_telegram_message(test_message)
