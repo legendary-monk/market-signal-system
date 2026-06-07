@@ -10,18 +10,18 @@ WHY this matters:
 - This module is the scientific rigor layer of the system
 
 Validation Logic:
-    On signal day (D): Save signal to predictions.csv
-    On next trading day (D+1): Fetch actual D-to-D+1 price change
+    On report day (D): Save signal to predictions.csv
+    On next available trading day (D+1): Fetch actual D-to-D+1 price change
                                Compare against predicted signal
     
 Accuracy Definition:
-    BULLISH was correct if next-day close > today's close
-    BEARISH was correct if next-day close < today's close
+    BULLISH was correct if next available close > report-day close
+    BEARISH was correct if next available close < report-day close
     NEUTRAL: Correct if |price change| < 0.5% (markets were indeed flat)
     
-WHY next-day accuracy instead of intraday:
+WHY next-available-close accuracy instead of intraday:
 - We generate signals at 9 AM. The market hasn't opened yet.
-- Daily close-to-close is the most natural validation horizon.
+- Close-to-close is the most natural validation horizon for this signal granularity.
 - Intraday noise makes validation meaningless at this signal granularity.
 """
 
@@ -91,7 +91,7 @@ def _ensure_csv_exists():
 
 def save_prediction(signal_result: Dict[str, Any]) -> bool:
     """
-    Saves today's signal to predictions.csv.
+    Saves the current weekly signal to predictions.csv.
     
     Args:
         signal_result: Full output from signal_engine.generate_signal()
@@ -99,8 +99,8 @@ def save_prediction(signal_result: Dict[str, Any]) -> bool:
     Returns:
         bool: True if saved successfully.
     
-    WHY write one row per day with PENDING outcome:
-    The outcome column starts as PENDING and gets filled in the next day
+    WHY write one row per report date with PENDING outcome:
+    The outcome column starts as PENDING and gets filled on a later run
     when we have the actual price movement. This two-phase design means
     we never need to modify old data — we just fill in the blanks.
     """
@@ -110,17 +110,17 @@ def save_prediction(signal_result: Dict[str, Any]) -> bool:
     now_ist = now_utc + IST_OFFSET
     date_str = now_ist.strftime('%Y-%m-%d')
     
-    # Check if we already saved a prediction for today
+    # Check if we already saved a prediction for this report date
     existing = _read_all_predictions()
-    today_predictions = [p for p in existing if p.get('date') == date_str]
+    current_date_predictions = [p for p in existing if p.get('date') == date_str]
     
-    if today_predictions:
+    if current_date_predictions:
         logger.warning(
             "Prediction for %s already exists (signal=%s). "
             "Skipping duplicate save.",
-            date_str, today_predictions[0].get('signal')
+            date_str, current_date_predictions[0].get('signal')
         )
-        return True  # WHY True: Not an error, just a duplicate prevention
+        return True  # WHY True: Not an error, just duplicate prevention
     
     row = {
         'date': date_str,
@@ -165,18 +165,18 @@ def save_prediction(signal_result: Dict[str, Any]) -> bool:
 
 def update_pending_outcomes(current_close: Optional[float]) -> int:
     """
-    Fills in outcomes for PENDING predictions from previous days.
+    Fills in outcomes for PENDING predictions from previous report dates.
     
-    This function is called at the start of each run with today's Nifty close.
-    It looks for yesterday's PENDING prediction and resolves its outcome.
+    This function is called at the start of each run with the latest Nifty close.
+    It looks for unresolved prior predictions and resolves outcomes when possible.
     
     Args:
-        current_close: Today's Nifty 50 closing price.
+        current_close: Latest Nifty 50 closing price.
     
     Returns:
         Number of outcomes updated.
     
-    WHY this design: We can't know yesterday's outcome until today's market closes.
+    WHY this design: We cannot resolve an outcome until a later market close is available.
     The PENDING system elegantly handles this temporal dependency.
     """
     predictions = _read_all_predictions()
@@ -449,7 +449,7 @@ def print_performance_report():
     
     print(f"\nTotal predictions saved:    {metrics['total_saved']}")
     print(f"Total resolved:             {metrics['total_resolved']}")
-    print(f"Pending (today/recent):     {metrics['pending_count']}")
+    print(f"Pending (current/recent):     {metrics['pending_count']}")
     
     print(f"\n📈 DIRECTIONAL ACCURACY")
     print(f"   Total signals:   {metrics['directional_total']}")

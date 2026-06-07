@@ -19,8 +19,8 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', "YOUR_CHAT_ID_HERE")
 MARKET_TICKER = "^NSEI"
 
 # How many calendar days of historical data to pull.
-# WHY 30: Enough for 20 trading days which is our feature window.
-MARKET_LOOKBACK_DAYS = 30
+# WHY 45: Enough for weekly reporting plus the 20-trading-day feature baseline.
+MARKET_LOOKBACK_DAYS = 45
 
 # ─────────────────────────────────────────────
 # NEWS FEED SETTINGS
@@ -41,9 +41,14 @@ RSS_FEEDS = [
 MAX_ARTICLES = 50
 
 # How old (in hours) an article can be and still count.
-# WHY 24: We're building a DAILY signal. Yesterday's news is noise today.
-MAX_ARTICLE_AGE_HOURS = 24
+# WHY 168: Weekly reports need a full seven-day news window.
+MAX_ARTICLE_AGE_HOURS = 168
 ALLOW_UNDATED_ARTICLES = False
+
+# Weekly report settings.
+# REPORT_LOOKBACK_TRADING_DAYS covers the standard Monday-Friday market week.
+REPORT_LOOKBACK_TRADING_DAYS = 5
+TOP_MOVEMENT_NEWS = 3
 
 # ─────────────────────────────────────────────
 # SIGNAL ENGINE PARAMETERS
@@ -158,6 +163,15 @@ def validate_config():
     total_weight = WEIGHT_SENTIMENT + WEIGHT_TREND + WEIGHT_VOLATILITY
     if abs(total_weight - 1.0) > 0.01:
         errors.append(f"Signal weights must sum to 1.0, currently sum to {total_weight:.2f}")
+
+    if MAX_ARTICLE_AGE_HOURS < 24:
+        errors.append("MAX_ARTICLE_AGE_HOURS should cover at least one day")
+
+    if REPORT_LOOKBACK_TRADING_DAYS < 1:
+        errors.append("REPORT_LOOKBACK_TRADING_DAYS must be at least 1")
+
+    if TOP_MOVEMENT_NEWS < 1:
+        errors.append("TOP_MOVEMENT_NEWS must be at least 1")
 
     fusion_sum = FUSION_WEIGHT_PRICE + FUSION_WEIGHT_SENTIMENT + FUSION_WEIGHT_REGIME
     if abs(fusion_sum - 1.0) > 0.01:
